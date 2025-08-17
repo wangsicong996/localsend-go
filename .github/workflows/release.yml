@@ -1,26 +1,57 @@
-name: Build and Release1
-
+name: Build and Release
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag name (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+        type: string
+      release_name:
+        description: 'Release name'
+        required: true
+        default: 'Manual Release'
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        default: false
+        type: boolean
+      draft:
+        description: 'Create as draft'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   create-release:
     runs-on: ubuntu-latest
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
+      tag_name: ${{ steps.get_tag.outputs.tag_name }}
     steps:
+      - name: Get tag name
+        id: get_tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "tag_name=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag_name=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+      
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
+          tag_name: ${{ steps.get_tag.outputs.tag_name }}
+          release_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_name || format('Release {0}', steps.get_tag.outputs.tag_name) }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.draft || 'false' }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease || 'false' }}
 
   build:
     needs: create-release
@@ -39,12 +70,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
+      
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: 1.22
-
+      
       - name: Get OS and ARCH
         id: platform
         run: |
@@ -57,15 +88,15 @@ jobs:
           else
             echo "EXT=" >> $GITHUB_OUTPUT
           fi
-
+      
       - name: Build
         env:
           GOOS: ${{ steps.platform.outputs.GOOS }}
           GOARCH: ${{ steps.platform.outputs.GOARCH }}
         run: |
           mkdir -p ./artifacts
-          go build -o "./artifacts/localsend-go-${{ steps.platform.outputs.FORMATTED_PLATFORM }}${{ steps.platform.outputs.EXT }}" .
-
+          go build -ldflags="-s -w" -o "./artifacts/localsend-go-${{ steps.platform.outputs.FORMATTED_PLATFORM }}${{ steps.platform.outputs.EXT }}" .
+      
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
         env:
